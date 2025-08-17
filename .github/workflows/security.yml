@@ -173,12 +173,15 @@ jobs:
           done
           curl -fsS "http://127.0.0.1:${APP_PORT}/health" >/dev/null 2>&1 || { echo "App did not start in time"; docker logs app || true; exit 1; }
 
+      - name: Pre-pull ZAP image (GHCR)
+        run: docker pull ghcr.io/zaproxy/zaproxy:stable
+
       - name: OWASP ZAP Baseline
         continue-on-error: true
         run: |
           docker run --rm --network host \
             -v "${{ github.workspace }}:/zap/wrk:rw" \
-            owasp/zap2docker-stable \
+            ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py \
               -t "http://127.0.0.1:${APP_PORT}" \
               -a -m $ZAP_MAX_MINUTES \

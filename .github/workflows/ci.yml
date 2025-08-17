@@ -72,24 +72,34 @@ jobs:
           docker push $IMAGE_NAME:$IMAGE_TAG
 
   image_scan:
-  name: Analyse des images (Trivy)
-  runs-on: ubuntu-latest
-  needs: build
-  steps:
-    - name: Login to DockerHub
-      uses: docker/login-action@v2
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
+    name: Analyse des images (Trivy)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Install Trivy CLI
+        uses: aquasecurity/setup-trivy@v0.2.3
+      - name: Trivy image scan
+        run: trivy image --severity HIGH,CRITICAL ${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec:${{ github.sha }}
 
-    - name: Install Trivy CLI
-      uses: aquasecurity/setup-trivy@v0.2.3
+  image_scan:
+    name: Analyse des images (Trivy)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Login to DockerHub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: Trivy image scan
-      run: |
-        IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
-        IMAGE_TAG=${{ github.sha }}
-        trivy image --severity HIGH,CRITICAL $IMAGE_NAME:$IMAGE_TAG
+      - name: Install Trivy CLI
+        uses: aquasecurity/setup-trivy@v0.2.3
+
+      - name: Trivy image scan
+        run: |
+          IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
+          IMAGE_TAG=${{ github.sha }}
+          trivy image --severity HIGH,CRITICAL $IMAGE_NAME:$IMAGE_TAG
 
 
 

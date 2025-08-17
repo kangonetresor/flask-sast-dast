@@ -156,12 +156,6 @@ jobs:
             trivy-image.sarif
             trivy-image.txt
 
-      - name: Fail if HIGH/CRITICAL found (image)
-        if: steps.trivy_image_sarif.outcome == 'failure'
-        run: |
-          echo "HIGH/CRITICAL vulnerabilities found by Trivy (image). Failing the job."
-          exit 1
-
       - name: Run app container
         run: |
           docker run -d --rm --name app -p 127.0.0.1:${APP_PORT}:${APP_PORT} "$IMAGE_TAG"
@@ -185,18 +179,29 @@ jobs:
             zap-baseline.py \
               -t "http://127.0.0.1:${APP_PORT}" \
               -a -m $ZAP_MAX_MINUTES \
-              -c .zap/rules.tsv \
-              -r zap-baseline.html \
-              -w zap-warn.txt
+              -c /zap/wrk/.zap/rules.tsv \
+              -r /zap/wrk/zap-baseline.html \
+              -w /zap/wrk/zap-warn.txt
+
+      - name: List ZAP outputs
+        if: always()
+        run: ls -lah .
 
       - name: Upload ZAP report
-        if: always()
+        if: ${{ always() && (hashFiles('zap-baseline.html') != '' || hashFiles('zap-warn.txt') != '') }}
         uses: actions/upload-artifact@v4
         with:
           name: zap-baseline
           path: |
             zap-baseline.html
             zap-warn.txt
+
+      # Gate déplacé en fin de job pour laisser ZAP tourner et uploader ses rapports
+      - name: Fail if HIGH/CRITICAL found (image)
+        if: steps.trivy_image_sarif.outcome == 'failure'
+        run: |
+          echo "HIGH/CRITICAL vulnerabilities found by Trivy (image). Failing the job."
+          exit 1
 
       - name: Stop app
         if: always()

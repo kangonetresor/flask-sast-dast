@@ -2,9 +2,7 @@ name: "Security Pipeline (Python: SAST + SCA + Image + DAST)"
 ### Test
 on:
   push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 permissions:

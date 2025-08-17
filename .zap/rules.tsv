@@ -1,0 +1,4 @@
+# alert_name	risk	confidence	ignore_reason
+X-Content-Type-Options Header Missing	INFO	Low	A ajouter plus tard
+X-Frame-Options Header Not Set	INFO	Low	A corriger avant prod
+Content Security Policy (CSP) Header Not Set	WARN	Medium	Sera ajouté côté reverse proxy

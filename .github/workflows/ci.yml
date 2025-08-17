@@ -127,7 +127,7 @@ jobs:
             -v $(pwd):/zap/wrk \
             --user root \
             ghcr.io/zaproxy/zaproxy:stable \
-            zap-baseline.py -t "http://127.0.0.1:8080" -m 5 -r zap-report.html
+            zap-baseline.py -t "http://127.0.0.1:8080" -m 5 -r zap-report.html -I
             
       - name: Upload ZAP report
         uses: actions/upload-artifact@v4

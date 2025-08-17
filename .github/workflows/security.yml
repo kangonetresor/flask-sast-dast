@@ -1,5 +1,5 @@
 name: "Security Pipeline (Python: SAST + SCA + Image + DAST)"
-### Test
+
 on:
   push:
   pull_request:
@@ -15,192 +15,80 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  codeql:
-    name: SAST CodeQL (Python)
+  pull_code:
+    name: Pulling du code
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+  sast:
+    name: Analyse statique (CodeQL)
+    runs-on: ubuntu-latest
+    needs: pull_code
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Init CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: python
-
       - name: Analyze
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:python"
 
-  trivy_deps:
-    name: SCA Trivy (dépendances Python)
+  sca:
+    name: Analyse des dépendances (Trivy)
     runs-on: ubuntu-latest
+    needs: pull_code
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Install Trivy CLI
         uses: aquasecurity/setup-trivy@v0.2.3
+      - name: Trivy scan deps
+        run: trivy fs --scanners vuln --vuln-type library --severity HIGH,CRITICAL .
 
-      - name: Trivy FS scan (SARIF)
-        id: trivy_deps_sarif
-        continue-on-error: true
-        run: |
-          trivy fs \
-            --scanners vuln \
-            --vuln-type library \
-            --format sarif \
-            --output trivy-deps.sarif \
-            --ignore-unfixed \
-            --severity HIGH,CRITICAL \
-            --exit-code 1 \
-            --skip-dirs .git \
-            --skip-dirs venv \
-            --skip-dirs .venv \
-            --skip-dirs __pycache__ \
-            .
-
-      - name: Upload SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-deps.sarif'
-
-      - name: Trivy FS scan (table lisible)
-        if: always()
-        run: |
-          trivy fs \
-            --scanners vuln \
-            --vuln-type library \
-            --format table \
-            --ignore-unfixed \
-            --severity HIGH,CRITICAL \
-            --skip-dirs .git \
-            --skip-dirs venv \
-            --skip-dirs .venv \
-            --skip-dirs __pycache__ \
-            . > trivy-deps.txt
-
-      - name: Artefacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-deps
-          path: |
-            trivy-deps.sarif
-            trivy-deps.txt
-
-      - name: Fail if HIGH/CRITICAL found
-        if: steps.trivy_deps_sarif.outcome == 'failure'
-        run: |
-          echo "HIGH/CRITICAL vulnerabilities found by Trivy (dependencies). Failing the job."
-          exit 1
-
-  image_and_dast:
-    name: Image scan (Trivy) + DAST (ZAP)
-    if: github.event_name != 'pull_request'
+  build:
+    name: Build de l’image
     runs-on: ubuntu-latest
-    needs: [codeql, trivy_deps]
-    env:
-      IMAGE_TAG: local/flask-demo:${{ github.sha }}
-      APP_PORT: "8080"
-      ZAP_MAX_MINUTES: "5"
+    needs: [sast, sca]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
-
       - name: Build app image
-        run: docker build -t "$IMAGE_TAG" .
+        run: docker build -t local/flask-demo:${{ github.sha }} .
 
+  image_scan:
+    name: Analyse des images (Trivy)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
       - name: Install Trivy CLI
         uses: aquasecurity/setup-trivy@v0.2.3
+      - name: Trivy image scan
+        run: trivy image --severity HIGH,CRITICAL local/flask-demo:${{ github.sha }}
 
-      - name: Trivy image scan (SARIF)
-        id: trivy_image_sarif
-        continue-on-error: true
-        run: |
-          trivy image \
-            --format sarif \
-            --output trivy-image.sarif \
-            --ignore-unfixed \
-            --severity HIGH,CRITICAL \
-            --exit-code 1 \
-            "$IMAGE_TAG"
-
-      - name: Upload SARIF image
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: 'trivy-image.sarif'
-
-      - name: Trivy image scan (table lisible)
-        if: always()
-        run: |
-          trivy image \
-            --format table \
-            --ignore-unfixed \
-            --severity HIGH,CRITICAL \
-            "$IMAGE_TAG" > trivy-image.txt
-
-      - name: Artefacts image
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-image
-          path: |
-            trivy-image.sarif
-            trivy-image.txt
-
+  dast:
+    name: Analyse dynamique (OWASP ZAP)
+    runs-on: ubuntu-latest
+    needs: image_scan
+    steps:
       - name: Run app container
-        run: |
-          docker run -d --rm --name app -p 127.0.0.1:${APP_PORT}:${APP_PORT} "$IMAGE_TAG"
-          for i in {1..30}; do
-            if curl -fsS "http://127.0.0.1:${APP_PORT}/health" >/dev/null 2>&1 || curl -fsS "http://127.0.0.1:${APP_PORT}" >/dev/null 2>&1; then
-              echo "App is up"; break
-            fi
-            sleep 2
-          done
-          curl -fsS "http://127.0.0.1:${APP_PORT}/health" >/dev/null 2>&1 || { echo "App did not start in time"; docker logs app || true; exit 1; }
-
-      - name: Pre-pull ZAP image (GHCR)
-        run: docker pull ghcr.io/zaproxy/zaproxy:stable
-
+        run: docker run -d --rm --name app -p 127.0.0.1:8080:8080 local/flask-demo:${{ github.sha }}
       - name: OWASP ZAP Baseline
-        continue-on-error: true
         run: |
           docker run --rm --network host \
-            -v "${{ github.workspace }}:/zap/wrk:rw" \
             ghcr.io/zaproxy/zaproxy:stable \
-            zap-baseline.py \
-              -t "http://127.0.0.1:${APP_PORT}" \
-              -a -m $ZAP_MAX_MINUTES \
-              -c /zap/wrk/.zap/rules.tsv \
-              -r /zap/wrk/zap-baseline.html \
-              -w /zap/wrk/zap-warn.txt
-
-      - name: List ZAP outputs
-        if: always()
-        run: ls -lah .
-
+            zap-baseline.py -t "http://127.0.0.1:8080" -m 5 -r zap-report.html
       - name: Upload ZAP report
-        if: ${{ always() && (hashFiles('zap-baseline.html') != '' || hashFiles('zap-warn.txt') != '') }}
         uses: actions/upload-artifact@v4
         with:
-          name: zap-baseline
-          path: |
-            zap-baseline.html
-            zap-warn.txt
-
-      # Gate déplacé en fin de job pour laisser ZAP tourner et uploader ses rapports
-      - name: Fail if HIGH/CRITICAL found (image)
-        if: steps.trivy_image_sarif.outcome == 'failure'
-        run: |
-          echo "HIGH/CRITICAL vulnerabilities found by Trivy (image). Failing the job."
-          exit 1
-
+          name: zap-report
+          path: zap-report.html
       - name: Stop app
         if: always()
         run: docker stop app

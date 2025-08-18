@@ -1,66 +1,82 @@
-site_name: Security Pipeline Dashboard
-site_description: Centralized Security Reports (SAST, SCA, Image Scan, DAST)
-site_author: DevSecOps Team
-repo_url: https://github.com/kangonetresor/flask-sast-dast.git
-repo_name: GitHub Repository
+#site_name: Security Pipeline Dashboard
+#site_description: Centralized Security Reports (SAST, SCA, Image Scan, DAST)
+#site_author: DevSecOps Team
+#repo_url: https://github.com/kangonetresor/flask-sast-dast.git
+#repo_name: GitHub Repository
 
-theme:
-  name: material
-  language: en
-  features:
-    - navigation.expand
-    - navigation.tabs
-    - navigation.sections
-    - toc.integrate
-    - content.code.copy
-    - content.action.edit
-  palette:
-    - scheme: default
-      primary: blue
-      accent: indigo
-    - scheme: slate
-      primary: blue
-      accent: cyan
-      toggle:
-        icon: material/weather-night
-        name: Switch to dark mode
+#theme:
+  #name: material
+  #language: en
+  #features:
+    #- navigation.expand
+    #- navigation.tabs
+    #- navigation.sections
+    #- toc.integrate
+    #- content.code.copy
+    #- content.action.edit
+  #palette:
+    #- scheme: default
+      #primary: blue
+      #accent: indigo
+    #- scheme: slate
+      #primary: blue
+      #accent: cyan
+      #toggle:
+        #icon: material/weather-night
+        #name: Switch to dark mode
 
+#nav:
+  #- Home: index.md
+  #- SAST:
+      #- Overview: sast/index.md
+      #- Bandit Report: sast/bandit.md
+      #- Pylint Report: sast/pylint.md
+      #- Other Tools: sast/others.md
+  #- SCA:
+      #- Overview: sca/index.md
+      #- Dependency Check: sca/dependency-check.md
+      #- Safety Report: sca/safety.md
+  #- Image Scan:
+      #- Overview: image-scan/index.md
+      #- Trivy Report: image-scan/trivy.md
+      #- Grype Report: image-scan/grype.md
+  #- DAST:
+      #- Overview: dast/index.md
+      #- ZAP Report: dast/zap.md
+      #- Other Tools: dast/others.md
+
+#markdown_extensions:
+  #- admonition
+  #- codehilite
+  #- footnotes
+  #- meta
+  #- toc:
+      #permalink: true
+  #- pymdownx.details
+  #- pymdownx.highlight
+  #- pymdownx.superfences
+  #- pymdownx.tabbed
+  #- pymdownx.tasklist:
+      #custom_checkbox: true
+
+#plugins:
+  #- search
+  #- tags
+  #- mkdocs-mermaid2-plugin
+  #- mike
+
+
+site_name: Security Dashboard
 nav:
   - Home: index.md
   - SAST:
-      - Overview: sast/index.md
-      - Bandit Report: sast/bandit.md
-      - Pylint Report: sast/pylint.md
-      - Other Tools: sast/others.md
+      - CodeQL: reports/codeql-summary.json
   - SCA:
-      - Overview: sca/index.md
-      - Dependency Check: sca/dependency-check.md
-      - Safety Report: sca/safety.md
+      - Trivy SCA: reports/trivy-sca.json
   - Image Scan:
-      - Overview: image-scan/index.md
-      - Trivy Report: image-scan/trivy.md
-      - Grype Report: image-scan/grype.md
+      - Trivy Image: reports/trivy-image.json
   - DAST:
-      - Overview: dast/index.md
-      - ZAP Report: dast/zap.md
-      - Other Tools: dast/others.md
+      - ZAP: reports/zap-report.html
+theme:
+  name: material
 
-markdown_extensions:
-  - admonition
-  - codehilite
-  - footnotes
-  - meta
-  - toc:
-      permalink: true
-  - pymdownx.details
-  - pymdownx.highlight
-  - pymdownx.superfences
-  - pymdownx.tabbed
-  - pymdownx.tasklist:
-      custom_checkbox: true
-
-plugins:
-  - search
-  - tags
-  - mkdocs-mermaid2-plugin
-  - mike

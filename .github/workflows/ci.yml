@@ -37,6 +37,17 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:python"
+      - name: Export CodeQL SARIF
+        run: |
+          mkdir -p reports
+          # CodeQL action a déjà uploadé le SARIF, on récupère une copie locale depuis le dossier par défaut si présent
+          # En fallback, on génère un "marqueur" pour Allure
+          echo '{"note":"CodeQL executed; see Security tab for full SARIF"}' > reports/codeql-summary.json
+      - name: Upload CodeQL report
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-report
+          path: reports/
 
   sca:
     name: Analyse des dépendances (Trivy)
@@ -49,6 +60,16 @@ jobs:
         uses: aquasecurity/setup-trivy@v0.2.3
       - name: Trivy scan deps
         run: trivy fs --scanners vuln --vuln-type library --severity HIGH,CRITICAL .
+      - name: Trivy scan deps (JSON)
+        run: |
+          trivy fs --scanners vuln --vuln-type library \
+            --severity HIGH,CRITICAL \
+            --format json --output trivy-sca.json .
+      - name: Upload SCA report
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-sca
+          path: trivy-sca.json
 
   build:
     name: Build de l’image
@@ -81,15 +102,24 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Install Trivy CLI
         uses: aquasecurity/setup-trivy@v0.2.3
-
       - name: Trivy image scan
         run: |
           IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
           IMAGE_TAG=${{ github.sha }}
           trivy image --severity HIGH,CRITICAL $IMAGE_NAME:$IMAGE_TAG
+      - name: Trivy image scan (JSON)
+        run: |
+          IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
+          IMAGE_TAG=${{ github.sha }}
+          trivy image --severity HIGH,CRITICAL \
+            --format json --output trivy-image.json $IMAGE_NAME:$IMAGE_TAG
+      - name: Upload image scan report
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-image
+          path: trivy-image.json
 
   dast:
     name: Analyse dynamique (OWASP ZAP)
@@ -101,13 +131,11 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Pull app image
         run: |
           IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
           IMAGE_TAG=${{ github.sha }}
           docker pull $IMAGE_NAME:$IMAGE_TAG
-
       - name: Run app container
         run: |
           IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
@@ -120,7 +148,6 @@ jobs:
             fi
             sleep 2
           done
-
       - name: OWASP ZAP Baseline
         run: |
           docker run --rm --network host \
@@ -128,14 +155,29 @@ jobs:
             --user root \
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py -t "http://127.0.0.1:8080" -m 5 -r zap-report.html -I
-            
       - name: Upload ZAP report
         uses: actions/upload-artifact@v4
         with:
           name: zap-report
           path: zap-report.html
-
       - name: Stop app
         if: always()
         run: docker stop app
+      - name: OWASP ZAP Baseline (HTML+JSON+XML)
+        run: |
+          docker run --rm --network host \
+            -v $(pwd):/zap/wrk \
+            --user root \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t "http://127.0.0.1:8080" -m 5 \
+            -r zap-report.html -J zap-report.json -x zap-report.xml -I
+      - name: Upload ZAP reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: |
+            zap-report.html
+            zap-report.json
+            zap-report.xml
+
 

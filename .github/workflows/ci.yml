@@ -15,9 +15,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  start_reportportal_launch:
+    name: Start ReportPortal Launch
+    runs-on: ubuntu-latest
+    outputs:
+      launch_id: ${{ steps.start_launch.outputs.launch_id }}
+    steps:
+      - name: Install Python & dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip
+          pip3 install reportportal-client
+      - name: Start launch
+        id: start_launch
+        run: |
+          python3 - <<'EOF'
+import os, json
+from reportportal_client import ReportPortalServiceAsync
+
+RP_ENDPOINT = os.environ['RP_ENDPOINT']
+RP_PROJECT = os.environ['RP_PROJECT']
+RP_TOKEN = os.environ['RP_TOKEN']
+
+service = ReportPortalServiceAsync(endpoint=RP_ENDPOINT, project=RP_PROJECT, token=RP_TOKEN)
+launch = service.start_launch(name="Security Pipeline Full Launch")
+print(f"::set-output name=launch_id::{launch['id']}")
+EOF
+
   pull_code:
     name: Pulling du code
     runs-on: ubuntu-latest
+    needs: start_reportportal_launch
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,7 +53,12 @@ jobs:
   sast:
     name: Analyse statique (CodeQL)
     runs-on: ubuntu-latest
-    needs: pull_code
+    needs: [pull_code, start_reportportal_launch]
+    env:
+      LAUNCH_ID: ${{ needs.start_reportportal_launch.outputs.launch_id }}
+      RP_ENDPOINT: ${{ secrets.RP_ENDPOINT }}
+      RP_PROJECT: ${{ secrets.RP_PROJECT }}
+      RP_TOKEN: ${{ secrets.RP_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,44 +68,63 @@ jobs:
           languages: python
       - name: Analyze
         uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:python"
-      - name: Export CodeQL SARIF
+      - name: Export & send CodeQL to ReportPortal
         run: |
+          pip install reportportal-client jq
           mkdir -p reports
-          # CodeQL action a déjà uploadé le SARIF, on récupère une copie locale depuis le dossier par défaut si présent
-          # En fallback, on génère un "marqueur" pour Allure
           echo '{"note":"CodeQL executed; see Security tab for full SARIF"}' > reports/codeql-summary.json
-      - name: Upload CodeQL report
-        uses: actions/upload-artifact@v4
-        with:
-          name: codeql-report
-          path: reports/
+          python3 - <<'EOF'
+import json, os
+from reportportal_client import ReportPortalServiceAsync
+
+launch_id = os.environ['LAUNCH_ID']
+service = ReportPortalServiceAsync(endpoint=os.environ['RP_ENDPOINT'], project=os.environ['RP_PROJECT'], token=os.environ['RP_TOKEN'])
+with open("reports/codeql-summary.json") as f:
+    data = json.load(f)
+test_item = service.start_test_item(name="CodeQL Scan", item_type="TEST", launch_id=launch_id)
+service.log(test_item['id'], level='ERROR', message=json.dumps(data))
+service.finish_test_item(test_item['id'])
+EOF
 
   sca:
     name: Analyse des dépendances (Trivy)
     runs-on: ubuntu-latest
-    needs: pull_code
+    needs: [pull_code, start_reportportal_launch]
+    env:
+      LAUNCH_ID: ${{ needs.start_reportportal_launch.outputs.launch_id }}
+      RP_ENDPOINT: ${{ secrets.RP_ENDPOINT }}
+      RP_PROJECT: ${{ secrets.RP_PROJECT }}
+      RP_TOKEN: ${{ secrets.RP_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Install Trivy CLI
         uses: aquasecurity/setup-trivy@v0.2.3
-      - name: Trivy scan deps
-        run: trivy fs --scanners vuln --vuln-type library --severity HIGH,CRITICAL .
       - name: Trivy scan deps (JSON)
         run: |
-          trivy fs --scanners vuln --vuln-type library \
-            --severity HIGH,CRITICAL \
-            --format json --output trivy-sca.json .
-      - name: Upload SCA report
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-sca
-          path: trivy-sca.json
+          trivy fs --scanners vuln --vuln-type library --severity HIGH,CRITICAL --format json --output trivy-sca.json .
+      - name: Upload Trivy SCA to ReportPortal
+        run: |
+          pip install reportportal-client
+          python3 - <<'EOF'
+import json, os
+from reportportal_client import ReportPortalServiceAsync
+
+launch_id = os.environ['LAUNCH_ID']
+service = ReportPortalServiceAsync(endpoint=os.environ['RP_ENDPOINT'], project=os.environ['RP_PROJECT'], token=os.environ['RP_TOKEN'])
+
+with open("trivy-sca.json") as f:
+    data = json.load(f)
+
+test_item = service.start_test_item(name="Trivy SCA Scan", item_type="TEST", launch_id=launch_id)
+for result in data.get("Results", []):
+    for vuln in result.get("Vulnerabilities", []):
+        service.log(test_item['id'], level='ERROR', message=f"{vuln.get('VulnerabilityID')}: {vuln.get('Description')}")
+service.finish_test_item(test_item['id'])
+EOF
 
   build:
-    name: Build de l’image
+    name: Build Docker image
     runs-on: ubuntu-latest
     needs: [sast, sca]
     steps:
@@ -80,198 +132,128 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
-      - name: Login to DockerHub
+      - name: Login DockerHub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build & Push Docker image
+      - name: Build & Push
         run: |
           IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
           IMAGE_TAG=${{ github.sha }}
           docker build -t $IMAGE_NAME:$IMAGE_TAG .
           docker push $IMAGE_NAME:$IMAGE_TAG
+
   image_scan:
-    name: Analyse des images (Trivy)
+    name: Analyse image (Trivy)
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build, start_reportportal_launch]
+    env:
+      LAUNCH_ID: ${{ needs.start_reportportal_launch.outputs.launch_id }}
+      RP_ENDPOINT: ${{ secrets.RP_ENDPOINT }}
+      RP_PROJECT: ${{ secrets.RP_PROJECT }}
+      RP_TOKEN: ${{ secrets.RP_TOKEN }}
     steps:
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Install Trivy CLI
         uses: aquasecurity/setup-trivy@v0.2.3
-      - name: Trivy image scan
+      - name: Scan Docker image (JSON)
         run: |
           IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
           IMAGE_TAG=${{ github.sha }}
-          trivy image --severity HIGH,CRITICAL $IMAGE_NAME:$IMAGE_TAG
-      - name: Trivy image scan (JSON)
+          trivy image --severity HIGH,CRITICAL --format json --output trivy-image.json $IMAGE_NAME:$IMAGE_TAG
+      - name: Upload Trivy Image to ReportPortal
         run: |
-          IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
-          IMAGE_TAG=${{ github.sha }}
-          trivy image --severity HIGH,CRITICAL \
-            --format json --output trivy-image.json $IMAGE_NAME:$IMAGE_TAG
-      - name: Upload image scan report
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-image
-          path: trivy-image.json
+          pip install reportportal-client
+          python3 - <<'EOF'
+import json, os
+from reportportal_client import ReportPortalServiceAsync
+
+launch_id = os.environ['LAUNCH_ID']
+service = ReportPortalServiceAsync(endpoint=os.environ['RP_ENDPOINT'], project=os.environ['RP_PROJECT'], token=os.environ['RP_TOKEN'])
+
+with open("trivy-image.json") as f:
+    data = json.load(f)
+
+test_item = service.start_test_item(name="Trivy Image Scan", item_type="TEST", launch_id=launch_id)
+for result in data.get("Results", []):
+    for vuln in result.get("Vulnerabilities", []):
+        service.log(test_item['id'], level='ERROR', message=f"{vuln.get('VulnerabilityID')}: {vuln.get('Description')}")
+service.finish_test_item(test_item['id'])
+EOF
 
   dast:
     name: Analyse dynamique (OWASP ZAP)
     runs-on: ubuntu-latest
-    needs: image_scan
+    needs: [image_scan, start_reportportal_launch]
+    env:
+      LAUNCH_ID: ${{ needs.start_reportportal_launch.outputs.launch_id }}
+      RP_ENDPOINT: ${{ secrets.RP_ENDPOINT }}
+      RP_PROJECT: ${{ secrets.RP_PROJECT }}
+      RP_TOKEN: ${{ secrets.RP_TOKEN }}
     steps:
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Pull app image
+      - name: Pull app image & run container
         run: |
           IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
           IMAGE_TAG=${{ github.sha }}
-          docker pull $IMAGE_NAME:$IMAGE_TAG
-      - name: Create Docker network
-        run: docker network create zapnet
-
-      - name: Run app container
-        env:
-          IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          set -e
+          docker network create zapnet || true
           docker run -d --rm --network zapnet --name app $IMAGE_NAME:$IMAGE_TAG
-      - name: Wait for app (healthcheck via curl container)
+      - name: Wait for app ready
         run: |
-          set -e
           for i in {1..30}; do
-            if docker run --rm --network zapnet curlimages/curl:8.8.0 -fsS http://app:8080/ >/dev/null 2>&1; then
-              echo "App is up"; exit 0
-            fi
-            echo "Waiting app... ($i/30)"; sleep 2
+            if docker run --rm --network zapnet curlimages/curl:8.8.0 -fsS http://app:8080/ >/dev/null 2>&1; then exit 0; fi
+            sleep 2
           done
-          echo "App did not become ready in time"; docker logs app || true
-          exit 1
-      - name: OWASP ZAP Baseline (HTML+JSON+XML)
+          echo "App did not become ready"; docker logs app || true; exit 1
+      - name: Run ZAP scan (HTML+JSON+XML)
         run: |
-          docker run --rm --network zapnet \
-            -v "$(pwd)":/zap/wrk \
-            --user root \
-            ghcr.io/zaproxy/zaproxy:stable \
-            zap-baseline.py -t "http://app:8080" -m 5 \
-            -r zap-report.html -J zap-report.json -x zap-report.xml -I
-      - name: Upload ZAP reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: zap-report
-          path: |
-            zap-report.html
-            zap-report.json
-            zap-report.xml
+          docker run --rm --network zapnet -v "$(pwd)":/zap/wrk --user root ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t "http://app:8080" -m 5 -r zap-report.html -J zap-report.json -x zap-report.xml -I
+      - name: Upload ZAP to ReportPortal
+        run: |
+          pip install reportportal-client
+          python3 - <<'EOF'
+import xml.etree.ElementTree as ET
+import os
+from reportportal_client import ReportPortalServiceAsync
+
+launch_id = os.environ['LAUNCH_ID']
+service = ReportPortalServiceAsync(endpoint=os.environ['RP_ENDPOINT'], project=os.environ['RP_PROJECT'], token=os.environ['RP_TOKEN'])
+
+tree = ET.parse("zap-report.xml")
+root = tree.getroot()
+test_item = service.start_test_item(name="ZAP Scan", item_type="TEST", launch_id=launch_id)
+for i, alert in enumerate(root.findall(".//alertitem")):
+    name = alert.findtext("alert") or f"zap-{i}"
+    desc = alert.findtext("desc") or ""
+    service.log(test_item['id'], level='ERROR', message=f"{name}: {desc}")
+service.finish_test_item(test_item['id'])
+EOF
       - name: Stop app
         if: always()
         run: docker stop app
 
-  allure_report:
-    name: Génération du rapport Allure
+  finish_reportportal_launch:
+    name: Finish ReportPortal Launch
     runs-on: ubuntu-latest
     needs: [sast, sca, image_scan, dast]
+    env:
+      LAUNCH_ID: ${{ needs.start_reportportal_launch.outputs.launch_id }}
+      RP_ENDPOINT: ${{ secrets.RP_ENDPOINT }}
+      RP_PROJECT: ${{ secrets.RP_PROJECT }}
+      RP_TOKEN: ${{ secrets.RP_TOKEN }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download all reports
-        uses: actions/download-artifact@v4
-        with:
-          path: reports
-
-      - name: Install dependencies
+      - name: Install Python
         run: |
           sudo apt-get update
-          sudo apt-get install -y default-jre unzip wget python3 python3-pip jq
-          wget https://github.com/allure-framework/allure2/releases/download/2.25.0/allure-2.25.0.zip
-          unzip allure-2.25.0.zip -d /opt/
-          sudo ln -s /opt/allure-2.25.0/bin/allure /usr/bin/allure
-          allure --version
-          pip3 install jsonschema
-
-      - name: Prepare Allure results
+          sudo apt-get install -y python3 python3-pip
+          pip3 install reportportal-client
+      - name: Finish launch
         run: |
-          mkdir -p allure-results
+          python3 - <<'EOF'
+import os
+from reportportal_client import ReportPortalServiceAsync
 
-          # --- CodeQL ---
-          if [ -d reports/codeql-report ]; then
-            for file in reports/codeql-report/*.json; do
-              [ -f "$file" ] || continue
-              vuln_name=$(jq -r '.note // "CodeQL Vulnerability"' "$file")
-              cat <<EOF > allure-results/codeql-$(basename "$file").json
-{
-  "name": "$vuln_name",
-  "status": "failed",
-  "statusDetails": { "message": "See GitHub Security tab for full CodeQL report" }
-}
+launch_id = os.environ['LAUNCH_ID']
+service = ReportPortalServiceAsync(endpoint=os.environ['RP_ENDPOINT'], project=os.environ['RP_PROJECT'], token=os.environ['RP_TOKEN'])
+service.finish_launch(launch_id)
 EOF
-            done
-          fi
-
-          # --- Trivy SCA ---
-          if [ -f reports/trivy-sca.json ]; then
-            python3 - <<'EOF'
-import json, os
-os.makedirs("allure-results", exist_ok=True)
-with open("reports/trivy-sca.json") as f:
-    data = json.load(f)
-vulns = data.get("Results", [])
-for i, result in enumerate(vulns):
-    for vuln in result.get("Vulnerabilities", []):
-        testcase = {
-            "name": vuln.get("VulnerabilityID", f"trivy-sca-{i}"),
-            "status": "failed",
-            "statusDetails": {"message": vuln.get("Description", "")}
-        }
-        with open(f"allure-results/trivy-sca-{i}-{vuln.get('VulnerabilityID','vuln')}.json", "w") as out:
-            json.dump(testcase, out)
-EOF
-          fi
-
-          # --- Trivy Image ---
-          if [ -f reports/trivy-image.json ]; then
-            python3 - <<'EOF'
-import json, os
-with open("reports/trivy-image.json") as f:
-    data = json.load(f)
-os.makedirs("allure-results", exist_ok=True)
-vulns = data.get("Results", [])
-for i, result in enumerate(vulns):
-    for vuln in result.get("Vulnerabilities", []):
-        testcase = {
-            "name": vuln.get("VulnerabilityID", f"trivy-image-{i}"),
-            "status": "failed",
-            "statusDetails": {"message": vuln.get("Description", "")}
-        }
-        with open(f"allure-results/trivy-image-{i}-{vuln.get('VulnerabilityID','vuln')}.json", "w") as out:
-            json.dump(testcase, out)
-EOF
-          fi
-
-          # --- OWASP ZAP ---
-          if [ -f reports/zap-report.xml ]; then
-            python3 - <<'EOF'
-import xml.etree.ElementTree as ET
-import os, json
-os.makedirs("allure-results", exist_ok=True)
-tree = ET.parse("reports/zap-report.xml")
-root = tree.getroot()
-for i, alert in enumerate(root.findall(".//alertitem")):
-    name = alert.findtext("alert") or f"zap-{i}"
-    desc = alert.findtext("desc") or ""
-    testcase = {"name": name, "status": "failed", "statusDetails": {"message": desc}}
-    with open(f"allure-results/zap-{i}-{name}.json", "w") as out:
-        json.dump(testcase, out)
-EOF
-          fi

@@ -139,27 +139,23 @@ jobs:
           docker pull $IMAGE_NAME:$IMAGE_TAG
 
       - name: Create Docker network
-        run: docker network create zapnet
+        run: docker network create zapnet || true
 
       - name: Run app container
-        env:
-          IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
-          IMAGE_TAG: ${{ github.sha }}
         run: |
-          set -e
+          IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
+          IMAGE_TAG=${{ github.sha }}
           docker run -d --rm --network zapnet --name app $IMAGE_NAME:$IMAGE_TAG
 
-      - name: Wait for app (healthcheck via curl container)
+      - name: Wait for app
         run: |
-          set -e
           for i in {1..30}; do
             if docker run --rm --network zapnet curlimages/curl:8.8.0 -fsS http://app:8080/ >/dev/null 2>&1; then
               echo "App is up"; exit 0
             fi
             echo "Waiting app... ($i/30)"; sleep 2
           done
-          echo "App did not become ready in time"; docker logs app || true
-          exit 1
+          echo "App did not become ready in time"; docker logs app || true; exit 1
 
       - name: OWASP ZAP Baseline (HTML+JSON+XML)
         run: |
@@ -181,7 +177,7 @@ jobs:
 
       - name: Stop app
         if: always()
-        run: docker stop app
+        run: docker stop app || true
 
   collect_reports:
     name: Collecte des rapports
@@ -190,12 +186,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: security-reports
-
       - name: Organize reports
         run: |
           mkdir -p site/reports
@@ -208,40 +202,40 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.x"
-
       - name: Install MkDocs + plugins
         run: |
           pip install mkdocs mkdocs-material pymdown-extensions mike
-          # j'ai supprimer : mkdocs-mermaid2-plugin
-
-      #- name: Install MkDocs Material
-        #run: pip install mkdocs mkdocs-material
-
       - name: Prepare docs
         run: |
           mkdir -p docs/reports
           cp -r site/reports/* docs/reports/ || true
-
-          # Index de base
+          # Création d'index.md
           echo "# Security Dashboard" > docs/index.md
           echo "## Rapports disponibles" >> docs/index.md
           ls docs/reports >> docs/index.md || echo "Aucun rapport trouvé" >> docs/index.md
-
+      - name: Create mkdocs.yml
+        run: |
+          echo "site_name: Security Dashboard" > mkdocs.yml
+          echo "nav:" >> mkdocs.yml
+          echo "  - Home: index.md" >> mkdocs.yml
+          echo "  - SAST:" >> mkdocs.yml
+          echo "    - CodeQL: docs/reports/codeql-summary.json" >> mkdocs.yml
+          echo "  - SCA:" >> mkdocs.yml
+          echo "    - Trivy SCA: docs/reports/trivy-sca.json" >> mkdocs.yml
+          echo "  - Image Scan:" >> mkdocs.yml
+          echo "    - Trivy Image: docs/reports/trivy-image.json" >> mkdocs.yml
+          echo "  - DAST:" >> mkdocs.yml
+          echo "    - ZAP: docs/reports/zap-report.html" >> mkdocs.yml
+          echo "theme:" >> mkdocs.yml
+          echo "  name: material" >> mkdocs.yml
       - name: Build MkDocs site
         run: |
           mkdocs build --site-dir site
-          if [ ! -d "site" ]; then
-            echo "Erreur : le dossier site/ n'a pas été créé par mkdocs !"
-            exit 1
-          fi
-
-      - name: List generated site folder
-        run: ls -la site
+          ls -la site
 
   deploy_pages:
     name: Déployer sur GitHub Pages
@@ -255,6 +249,5 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
-
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4

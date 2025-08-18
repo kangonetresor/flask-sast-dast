@@ -9,8 +9,8 @@ permissions:
   contents: read
   security-events: write
   actions: read
-  pages: write       
-  id-token: write 
+  pages: write
+  id-token: write
 
 concurrency:
   group: security-${{ github.ref }}
@@ -42,8 +42,6 @@ jobs:
       - name: Export CodeQL SARIF
         run: |
           mkdir -p reports
-          # CodeQL action a déjà uploadé le SARIF, on récupère une copie locale depuis le dossier par défaut si présent
-          # En fallback, on génère un "marqueur" pour Allure
           echo '{"note":"CodeQL executed; see Security tab for full SARIF"}' > reports/codeql-summary.json
       - name: Upload CodeQL report
         uses: actions/upload-artifact@v4
@@ -217,15 +215,27 @@ jobs:
           python-version: "3.x"
 
       - name: Install MkDocs Material
-        run: pip install mkdocs-material
+        run: pip install mkdocs mkdocs-material
 
-      - name: Copy reports into docs
+      - name: Prepare docs
         run: |
           mkdir -p docs/reports
           cp -r site/reports/* docs/reports/ || true
+
+          # Création d'un mkdocs.yml minimal si absent
+          if [ ! -f mkdocs.yml ]; then
+            echo "site_name: Security Dashboard" > mkdocs.yml
+            echo "nav:" >> mkdocs.yml
+            echo "  - Home: index.md" >> mkdocs.yml
+            echo "  - Reports: reports/" >> mkdocs.yml
+            echo "theme:" >> mkdocs.yml
+            echo "  name: material" >> mkdocs.yml
+          fi
+
+          # Index de base
           echo "# Security Dashboard" > docs/index.md
           echo "## Rapports disponibles" >> docs/index.md
-          ls docs/reports >> docs/index.md
+          ls docs/reports >> docs/index.md || echo "Aucun rapport trouvé" >> docs/index.md
 
       - name: Build MkDocs site
         run: mkdocs build
@@ -245,5 +255,3 @@ jobs:
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
-
-

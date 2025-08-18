@@ -136,25 +136,27 @@ jobs:
           IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
           IMAGE_TAG=${{ github.sha }}
           docker pull $IMAGE_NAME:$IMAGE_TAG
+      - name: Create Docker network
+        run: docker network create zapnet
       - name: Run app container
         run: |
           IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
           IMAGE_TAG=${{ github.sha }}
-          docker run -d --rm --name app -p 127.0.0.1:8080:8080 $IMAGE_NAME:$IMAGE_TAG
+          docker run -d --rm --network zapnet --name app $IMAGE_NAME:$IMAGE_TAG
           # attendre que l’app soit UP
           for i in {1..30}; do
-            if curl -fsS "http://127.0.0.1:8080" >/dev/null 2>&1; then
+            if docker exec app curl -fsS "http://localhost:8080" >/dev/null 2>&1; then
               echo "App is up"; break
             fi
             sleep 2
           done
       - name: OWASP ZAP Baseline
         run: |
-          docker run --rm --network host \
-            -v $(pwd):/zap/wrk \
-            --user root \
-            ghcr.io/zaproxy/zaproxy:stable \
-            zap-baseline.py -t "http://127.0.0.1:8080" -m 5 -r zap-report.html -I
+            docker run --rm --network zapnet \
+              -v $(pwd):/zap/wrk \
+              --user root \
+              ghcr.io/zaproxy/zaproxy:stable \
+              zap-baseline.py -t "http://app:8080" -m 5 -r zap-report.html -J zap-report.json -x zap-report.xml -I
       - name: Upload ZAP report
         uses: actions/upload-artifact@v4
         with:

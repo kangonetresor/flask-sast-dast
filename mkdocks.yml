@@ -1,0 +1,21 @@
+site_name: Documentation du Projet
+site_description: Documentation générée avec MkDocs
+site_author: Ton Nom
+repo_url: https://github.com/ton-compte/ton-projet
+
+nav:
+  - Accueil: index.md
+  - Guide:
+      - Introduction: guide/introduction.md
+      - Installation: guide/installation.md
+      - Utilisation: guide/utilisation.md
+
+theme:
+  name: material  # (ou "mkdocs" si tu veux rester en thème par défaut)
+  language: fr
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - toc:
+      permalink: true

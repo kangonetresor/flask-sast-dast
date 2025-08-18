@@ -131,22 +131,15 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
       - name: Pull app image
         run: |
           IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
           IMAGE_TAG=${{ github.sha }}
           docker pull $IMAGE_NAME:$IMAGE_TAG
-
       - name: Create Docker network
         run: docker network create zapnet || true
-
       - name: Run app container
-        run: |
-          IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
-          IMAGE_TAG=${{ github.sha }}
-          docker run -d --rm --network zapnet --name app $IMAGE_NAME:$IMAGE_TAG
-
+        run: docker run -d --rm --network zapnet --name app ${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec:${{ github.sha }}
       - name: Wait for app
         run: |
           for i in {1..30}; do
@@ -155,8 +148,8 @@ jobs:
             fi
             echo "Waiting app... ($i/30)"; sleep 2
           done
-          echo "App did not become ready in time"; docker logs app || true; exit 1
-
+          echo "App did not become ready"; docker logs app || true
+          exit 1
       - name: OWASP ZAP Baseline (HTML+JSON+XML)
         run: |
           docker run --rm --network zapnet \
@@ -165,16 +158,14 @@ jobs:
             ghcr.io/zaproxy/zaproxy:stable \
             zap-baseline.py -t "http://app:8080" -m 5 \
             -r zap-report.html -J zap-report.json -x zap-report.xml -I
-
       - name: Upload ZAP reports
         uses: actions/upload-artifact@v4
         with:
           name: zap-report
-          path: |
-            zap-report.html
-            zap-report.json
-            zap-report.xml
-
+          path:
+            - zap-report.html
+            - zap-report.json
+            - zap-report.xml
       - name: Stop app
         if: always()
         run: docker stop app || true
@@ -192,8 +183,8 @@ jobs:
           path: security-reports
       - name: Organize reports
         run: |
-          mkdir -p site/reports
-          cp -r security-reports/* site/reports/ || true
+          mkdir -p docs/reports
+          cp -r security-reports/* docs/reports/ || true
 
   build_dashboard:
     name: Générer le dashboard sécurité
@@ -209,33 +200,39 @@ jobs:
       - name: Install MkDocs + plugins
         run: |
           pip install mkdocs mkdocs-material pymdown-extensions mike
-      - name: Prepare docs
+      - name: Prepare mkdocs.yml
         run: |
-          mkdir -p docs/reports
-          cp -r site/reports/* docs/reports/ || true
-          # Création d'index.md
+          cat > mkdocs.yml <<EOL
+          site_name: Security Dashboard
+          nav:
+            - Home: index.md
+            - SAST:
+                - CodeQL: reports/codeql-summary.json
+            - SCA:
+                - Trivy SCA: reports/trivy-sca.json
+            - Image Scan:
+                - Trivy Image: reports/trivy-image.json
+            - DAST:
+                - ZAP: reports/zap-report.html
+          theme:
+            name: material
+          plugins:
+            - search
+          EOL
+      - name: Prepare docs/index.md
+        run: |
+          mkdir -p docs
           echo "# Security Dashboard" > docs/index.md
           echo "## Rapports disponibles" >> docs/index.md
           ls docs/reports >> docs/index.md || echo "Aucun rapport trouvé" >> docs/index.md
-      - name: Create mkdocs.yml
-        run: |
-          echo "site_name: Security Dashboard" > mkdocs.yml
-          echo "nav:" >> mkdocs.yml
-          echo "  - Home: index.md" >> mkdocs.yml
-          echo "  - SAST:" >> mkdocs.yml
-          echo "    - CodeQL: docs/reports/codeql-summary.json" >> mkdocs.yml
-          echo "  - SCA:" >> mkdocs.yml
-          echo "    - Trivy SCA: docs/reports/trivy-sca.json" >> mkdocs.yml
-          echo "  - Image Scan:" >> mkdocs.yml
-          echo "    - Trivy Image: docs/reports/trivy-image.json" >> mkdocs.yml
-          echo "  - DAST:" >> mkdocs.yml
-          echo "    - ZAP: docs/reports/zap-report.html" >> mkdocs.yml
-          echo "theme:" >> mkdocs.yml
-          echo "  name: material" >> mkdocs.yml
       - name: Build MkDocs site
+        run: mkdocs build --site-dir ./site
+      - name: Check site folder
         run: |
-          mkdocs build --site-dir ./site
-          echo "Listing site content:"
+          if [ ! -d site ]; then
+            echo "site folder does not exist! Build failed."
+            exit 1
+          fi
           ls -la site
 
   deploy_pages:
@@ -246,8 +243,6 @@ jobs:
       pages: write
       id-token: write
     steps:
-      - name: Check site folder
-        run: ls -la site || echo "site folder does not exist!"
       - name: Upload GitHub Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:

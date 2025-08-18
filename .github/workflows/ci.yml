@@ -150,21 +150,6 @@ jobs:
             fi
             sleep 2
           done
-      - name: OWASP ZAP Baseline
-        run: |
-            docker run --rm --network zapnet \
-              -v $(pwd):/zap/wrk \
-              --user root \
-              ghcr.io/zaproxy/zaproxy:stable \
-              zap-baseline.py -t "http://app:8080" -m 5 -r zap-report.html -J zap-report.json -x zap-report.xml -I
-      - name: Upload ZAP report
-        uses: actions/upload-artifact@v4
-        with:
-          name: zap-report
-          path: zap-report.html
-      - name: Stop app
-        if: always()
-        run: docker stop app
       - name: OWASP ZAP Baseline (HTML+JSON+XML)
         run: |
           docker run --rm --network host \
@@ -181,5 +166,9 @@ jobs:
             zap-report.html
             zap-report.json
             zap-report.xml
+      - name: Stop app
+        if: always()
+        run: docker stop app
+      
 
 

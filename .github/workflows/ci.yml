@@ -214,6 +214,10 @@ jobs:
         with:
           python-version: "3.x"
 
+      - name: Install MkDocs + plugins
+        run: |
+          pip install mkdocs mkdocs-material mkdocs-mermaid2-plugin pymdown-extensions mike
+
       - name: Install MkDocs Material
         run: pip install mkdocs mkdocs-material
 

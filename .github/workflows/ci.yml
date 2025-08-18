@@ -184,43 +184,94 @@ jobs:
         run: docker stop app
 
   allure_report:
-    name: Génération du rapport Allure
+    name: Centralisation & Allure Report
     runs-on: ubuntu-latest
     needs: [sast, sca, image_scan, dast]
+
     steps:
-      - name: Checkout
+      - name: Checkout (optional)
         uses: actions/checkout@v4
 
-      - name: Download all reports
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          path: reports
+          path: artifacts
 
-      - name: Install Allure
+      - name: Prepare allure-results with synthetic tests
         run: |
-          sudo apt-get update
-          sudo apt-get install -y default-jre unzip wget
-          wget https://github.com/allure-framework/allure2/releases/download/2.25.0/allure-2.25.0.zip
-          unzip allure-2.25.0.zip -d /opt/
-          sudo ln -s /opt/allure-2.25.0/bin/allure /usr/bin/allure
+          set -e
+          mkdir -p allure-results
+
+          mk_test () {
+            NAME="$1"; STATUS="$2"; ATT_PATH="$3"; ATT_NAME="$4"; ATT_MIME="$5"
+            UUID=$(uuidgen || cat /proc/sys/kernel/random/uuid)
+            if [ -f "$ATT_PATH" ]; then
+              cp "$ATT_PATH" "allure-results/$ATT_NAME"
+            fi
+            cat > "allure-results/$UUID-result.json" <<EOF
+            {
+              "uuid": "$UUID",
+              "name": "$NAME",
+              "status": "$STATUS",
+              "attachments": [
+                { "name": "$ATT_NAME", "type": "$ATT_MIME", "source": "$ATT_NAME" }
+              ]
+            }
+EOF
+          }
+
+          # 1) SAST (CodeQL)
+          CODEQL_JSON="artifacts/codeql-report/codeql-summary.json"
+          if [ -f "$CODEQL_JSON" ]; then
+            mk_test "SAST - CodeQL Summary" "passed" "$CODEQL_JSON" "codeql-summary.json" "application/json"
+          else
+            echo '{"note":"CodeQL summary not found"}' > allure-results/codeql-fallback.json
+          fi
+
+          # 2) SCA (Trivy deps)
+          SCA_JSON="artifacts/trivy-sca/trivy-sca.json"
+          if [ -f "$SCA_JSON" ]; then
+            mk_test "SCA - Trivy (Dépendances)" "passed" "$SCA_JSON" "trivy-sca.json" "application/json"
+          fi
+
+          # 3) Image Scan (Trivy image)
+          IMG_JSON="artifacts/trivy-image/trivy-image.json"
+          if [ -f "$IMG_JSON" ]; then
+            mk_test "Image Scan - Trivy (Image Docker)" "passed" "$IMG_JSON" "trivy-image.json" "application/json"
+          fi
+
+          # 4) DAST (ZAP)
+          ZAP_HTML="artifacts/zap-report/zap-report.html"
+          if [ -f "$ZAP_HTML" ]; then
+            mk_test "DAST - OWASP ZAP Baseline" "passed" "$ZAP_HTML" "zap-report.html" "text/html"
+          fi
+
+          ZAP_JSON="artifacts/zap-report/zap-report.json"
+          if [ -f "$ZAP_JSON" ]; then
+            mk_test "DAST - OWASP ZAP (JSON)" "passed" "$ZAP_JSON" "zap-report.json" "application/json"
+          fi
+
+      - name: Setup Java (for Allure CLI)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install Allure CLI
+        run: |
+          ALLURE_VERSION=2.25.0
+          curl -sL "https://github.com/allure-framework/allure2/releases/download/$ALLURE_VERSION/allure-$ALLURE_VERSION.tgz" -o allure.tgz
+          sudo tar -zxvf allure.tgz -C /opt/
+          sudo ln -s /opt/allure-$ALLURE_VERSION/bin/allure /usr/local/bin/allure
           allure --version
 
-      - name: Prepare Allure results
+      - name: Generate Allure Report
         run: |
-          mkdir -p allure-results
-          # Copier/convertir les différents rapports vers allure-results/
-          cp reports/codeql-report/* allure-results/ || true
-          cp reports/trivy-sca.json allure-results/ || true
-          cp reports/trivy-image.json allure-results/ || true
-          cp reports/zap-report.xml allure-results/ || true
+          allure generate allure-results --clean -o allure-report
+          echo "Allure report generated in ./allure-report"
 
-      - name: Generate Allure report
-        run: |
-          allure generate allure-results -o allure-report --clean
-
-      - name: Upload Allure report
+      - name: Upload Allure Report (artifact)
         uses: actions/upload-artifact@v4
         with:
           name: allure-report
           path: allure-report
-

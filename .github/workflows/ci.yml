@@ -182,3 +182,45 @@ jobs:
       - name: Stop app
         if: always()
         run: docker stop app
+
+  allure_report:
+    name: Génération du rapport Allure
+    runs-on: ubuntu-latest
+    needs: [sast, sca, image_scan, dast]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all reports
+        uses: actions/download-artifact@v4
+        with:
+          path: reports
+
+      - name: Install Allure
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y default-jre unzip wget
+          wget https://github.com/allure-framework/allure2/releases/download/2.25.0/allure-2.25.0.zip
+          unzip allure-2.25.0.zip -d /opt/
+          sudo ln -s /opt/allure-2.25.0/bin/allure /usr/bin/allure
+          allure --version
+
+      - name: Prepare Allure results
+        run: |
+          mkdir -p allure-results
+          # Copier/convertir les différents rapports vers allure-results/
+          cp reports/codeql-report/* allure-results/ || true
+          cp reports/trivy-sca.json allure-results/ || true
+          cp reports/trivy-image.json allure-results/ || true
+          cp reports/zap-report.xml allure-results/ || true
+
+      - name: Generate Allure report
+        run: |
+          allure generate allure-results -o allure-report --clean
+
+      - name: Upload Allure report
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: allure-report
+

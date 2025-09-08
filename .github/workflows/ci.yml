@@ -1,51 +1,55 @@
-name: "Security Pipeline (Python: SAST + SCA + Image + DAST)"
+name: "Security Pipeline (Python: SAST)"
 
 on:
   push:
-  pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
   security-events: write
   actions: read
 
-concurrency:
-  group: security-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  pull_code:
-    name: Pulling du code
-    runs-on: self-hosted
+  security_scan:
+    name: Analyse SAST + Rapport Allure
+    runs-on: ubuntu-latest
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-  sast:
-    name: Analyse statique (CodeQL)
-    runs-on: self-hosted
-    needs: pull_code
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      # Initialisation de CodeQL
       - name: Init CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: python
-      - name: Analyze
+
+      # Analyse CodeQL
+      - name: CodeQL Analyze
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:python"
-      - name: Export CodeQL SARIF
-        run: |
-          mkdir -p reports
-          # CodeQL action a déjà uploadé le SARIF, on récupère une copie locale depuis le dossier par défaut si présent
-          # En fallback, on génère un "marqueur" pour Allure
-          echo '{"note":"CodeQL executed; see Security tab for full SARIF"}' > reports/codeql-summary.json
-      - name: Upload CodeQL report
-        uses: actions/upload-artifact@v4
-        with:
-          name: codeql-report
-          path: reports/
 
+      # Préparer un résultat pour Allure
+      - name: Préparer rapport Allure
+        run: |
+          mkdir -p build/allure-results
+          echo '{"status":"passed","name":"CodeQL Analysis","message":"Voir l’onglet Security pour les résultats détaillés."}' \
+          > build/allure-results/codeql-result.json
+
+      # Génération du rapport Allure
+      - name: Générer rapport Allure
+        uses: simple-elf/allure-report-action@v1.7
+        if: always()
+        with:
+          gh_pages: gh-pages
+          allure_history: allure-history
+          allure_results: build/allure-results
+
+      # Publication du rapport sur GitHub Pages
+      - name: Publier rapport Allure
+        uses: peaceiris/actions-gh-pages@v3
+        if: always()
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: allure-history

@@ -4,7 +4,9 @@ on:
   push:
 
 permissions:
-  contents: read
+  contents: write   # important pour gh-pages
+  pages: write
+  id-token: write
   security-events: write
   actions: read
 

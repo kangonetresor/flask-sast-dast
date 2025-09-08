@@ -1,4 +1,4 @@
-name: "Security Pipeline (Python: SAST + SCA + Image + DAST)"
+name: "SAST - CodeQL Analysis with Allure"
 
 on:
   push:
@@ -6,159 +6,50 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write      # nécessaire pour artefacts et gh-pages
+  contents: write
+  security-events: write
   pages: write
   id-token: write
-  security-events: write
-  actions: read
-
-concurrency:
-  group: security-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
-  sast:
-    name: Analyse statique (CodeQL)
+  codeql:
+    name: Analyse SAST (CodeQL)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout source code
         uses: actions/checkout@v4
-      - name: Init CodeQL
+
+      - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: python
-      - name: Analyze
+
+      - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
         with:
           category: "/language:python"
-      - name: Upload SARIF
+          output: results
+
+      - name: Upload CodeQL SARIF
         uses: actions/upload-artifact@v4
         with:
           name: codeql-sarif
-          path: ./.github/codeql
+          path: results
 
-  sca:
-    name: Analyse des dépendances (Trivy)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Install Trivy CLI
-        uses: aquasecurity/setup-trivy@v0.2.3
-      - name: Trivy scan deps (JSON)
-        run: trivy fs --scanners vuln --vuln-type library --severity HIGH,CRITICAL --format json --output trivy-sca.json .
-      - name: Upload SCA report
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-sca
-          path: trivy-sca.json
-
-  build:
-    name: Build de l’image
-    runs-on: ubuntu-latest
-    needs: [sast, sca]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Build & Push Docker image
-        run: |
-          IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
-          IMAGE_TAG=${{ github.sha }}
-          docker build -t $IMAGE_NAME:$IMAGE_TAG .
-          docker push $IMAGE_NAME:$IMAGE_TAG
-
-  image_scan:
-    name: Analyse des images (Trivy)
-    runs-on: ubuntu-latest
-    needs: build
-    steps:
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Install Trivy CLI
-        uses: aquasecurity/setup-trivy@v0.2.3
-      - name: Trivy image scan (JSON)
-        run: |
-          IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
-          IMAGE_TAG=${{ github.sha }}
-          trivy image --severity HIGH,CRITICAL --format json --output trivy-image.json $IMAGE_NAME:$IMAGE_TAG
-      - name: Upload image scan report
-        uses: actions/upload-artifact@v4
-        with:
-          name: trivy-image
-          path: trivy-image.json
-
-  dast:
-    name: Analyse dynamique (OWASP ZAP)
-    runs-on: ubuntu-latest
-    needs: image_scan
-    steps:
-      - name: Login to DockerHub
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Pull app image
-        run: |
-          IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
-          IMAGE_TAG=${{ github.sha }}
-          docker pull $IMAGE_NAME:$IMAGE_TAG
-      - name: Create Docker network
-        run: docker network create zapnet
-      - name: Run app container
-        run: |
-          IMAGE_NAME=${{ secrets.DOCKERHUB_USERNAME }}/img_app_arolitec
-          IMAGE_TAG=${{ github.sha }}
-          docker run -d --rm --network zapnet --name app $IMAGE_NAME:$IMAGE_TAG
-      - name: Wait for app
-        run: |
-          for i in {1..30}; do
-            if docker run --rm --network zapnet curlimages/curl:8.8.0 -fsS http://app:8080/ >/dev/null 2>&1; then
-              echo "App is up"; exit 0
-            fi
-            echo "Waiting app... ($i/30)"; sleep 2
-          done
-          echo "App did not become ready in time"; docker logs app || true
-          exit 1
-      - name: OWASP ZAP Baseline
-        run: |
-          docker run --rm --network zapnet \
-            -v "$(pwd)":/zap/wrk \
-            ghcr.io/zaproxy/zaproxy:stable \
-            zap-baseline.py -t "http://app:8080" -m 5 \
-            -r zap-report.html -J zap-report.json -x zap-report.xml -I
-      - name: Upload ZAP reports
-        uses: actions/upload-artifact@v4
-        with:
-          name: zap-report
-          path: |
-            zap-report.html
-            zap-report.json
-            zap-report.xml
-      - name: Stop app
-        if: always()
-        run: docker stop app
-
-  allure_report:
+  allure:
     name: Génération du rapport Allure
     runs-on: ubuntu-latest
-    needs: [sast, sca, image_scan, dast]
+    needs: codeql
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
-      - name: Download all reports
+
+      - name: Download CodeQL SARIF results
         uses: actions/download-artifact@v4
         with:
+          name: codeql-sarif
           path: reports
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -167,41 +58,41 @@ jobs:
           unzip allure-2.25.0.zip -d /opt/
           sudo ln -s /opt/allure-2.25.0/bin/allure /usr/bin/allure
           pip3 install jsonschema
-      - name: Convert reports to Allure
+
+      - name: Convert CodeQL SARIF to Allure
         run: |
           mkdir -p allure-results
-          python3 scripts/convert_reports.py reports allure-results
+          python3 scripts/convert_codeql.py reports allure-results
+
       - name: Generate Allure report
         run: |
           allure generate allure-results -o allure-report --clean
-      - name: Upload Allure report
+
+      - name: Upload Allure report as artifact
         uses: actions/upload-artifact@v4
         with:
           name: allure-report
           path: allure-report
 
   deploy:
-    name: Publier sur GitHub Pages
+    name: Publier Allure Report sur GitHub Pages
     runs-on: ubuntu-latest
-    needs: allure_report
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    needs: allure
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Download Allure report
         uses: actions/download-artifact@v4
         with:
           name: allure-report
           path: ./allure-report
+
       - name: Upload artifact to Pages
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./allure-report
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

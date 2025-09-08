@@ -62,7 +62,7 @@ jobs:
       - name: Convert CodeQL SARIF to Allure
         run: |
           mkdir -p allure-results
-          python3 scripts/convert_codeql.py reports allure-results
+          python3 scripts/convert_reports.py reports allure-results
 
       - name: Generate Allure report
         run: |
